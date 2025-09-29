@@ -70,8 +70,10 @@ async def process_csv(file_path: str, day_number: int):
                     group = "ББ"
                 elif ch == "15686":
                     group = "ББ ДОП_1"
-                else:
+                elif ch == "15273":
                     group = "ББ ДОП_2"
+                else:
+                    group = "ББ ДОП_3"
                 output_data[group].append(phone)
                 group_stats[group] += 1
                 local_stats[group] += 1
