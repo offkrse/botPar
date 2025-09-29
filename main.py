@@ -11,12 +11,13 @@ import os
 # === Конфиг ===
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")  # Render автоматически задаёт этот env
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")  # Render задаёт автоматически
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 BASE_DATE = datetime(2025, 7, 14)
 BASE_NUMBER = 53
 
+# Память
 day_overrides = {}
 unit_sessions = {}
 
@@ -108,12 +109,92 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start(message: types.Message):
-    await message.answer("Привет 👋 Пришли CSV файл, и я сделаю TXT с номерами.")
+    await message.answer(
+        "Привет 👋\n"
+        "Пришли CSV файл, и я сделаю TXT с номерами.\n\n"
+        "Команды:\n"
+        "• /day <число> — задать номер дня вручную\n"
+        "• /unit [число] — объединить 2 TXT в Б1 (номер дня)"
+    )
 
-# ... остальные handlers (как у тебя, без изменений)
+@dp.message(Command("day"))
+async def set_day(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        day_number = int(message.text.split()[1])
+        day_overrides[user_id] = day_number
+        await message.answer(f"✅ Номер дня установлен: {day_number}")
+    except:
+        await message.answer("❌ Используй: /day <число>")
 
-# === Запуск webhook сервера ===
+@dp.message(Command("unit"))
+async def start_unit(message: types.Message):
+    user_id = message.from_user.id
+    parts = message.text.split()
+    if len(parts) > 1:
+        try:
+            day_number = int(parts[1])
+        except:
+            return await message.answer("❌ Используй: /unit <число>")
+    else:
+        today = datetime.today()
+        day_number = get_day_number(today)
+    unit_sessions[user_id] = {"files": [], "day": day_number}
+    await message.answer(
+        f"📂 Режим объединения активирован.\n"
+        f"Пришли 2 TXT файла, и я соберу их в один `Б1 ({day_number}).txt`"
+    )
+
+@dp.message()
+async def handle_files(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in unit_sessions:
+        if not message.document:
+            return await message.answer("❌ Жду файл в формате TXT")
+        file = message.document
+        if not file.file_name.endswith(".txt"):
+            return await message.answer("❌ Поддерживаются только TXT файлы.")
+        file_path = f"temp_{user_id}_{len(unit_sessions[user_id]['files'])}.txt"
+        await bot.download(file, destination=file_path)
+        unit_sessions[user_id]["files"].append(file_path)
+        if len(unit_sessions[user_id]["files"]) == 2:
+            day_number = unit_sessions[user_id]["day"]
+            output_name = f"Б1 ({day_number}).txt"
+            phones = []
+            for f in unit_sessions[user_id]["files"]:
+                with open(f, encoding="utf-8") as fh:
+                    phones.extend([line.strip() for line in fh if line.strip()])
+                os.remove(f)
+            with open(output_name, "w", encoding="utf-8") as out:
+                out.write("\n".join(phones))
+            await message.answer_document(FSInputFile(output_name))
+            os.remove(output_name)
+            del unit_sessions[user_id]
+        else:
+            await message.answer("✅ Первый файл получен. Жду второй...")
+        return
+    if not message.document:
+        return await message.answer("📂 Пришли CSV файл.")
+    file = message.document
+    if not file.file_name.endswith(".csv"):
+        return await message.answer("❌ Поддерживаются только CSV файлы.")
+    file_path = f"temp_{file.file_name}"
+    await bot.download(file, destination=file_path)
+    today = datetime.today()
+    day_number = day_overrides.get(user_id, get_day_number(today))
+    saved_files, stats = await process_csv(file_path, day_number)
+    if not saved_files:
+        await message.answer(stats)
+    else:
+        await message.answer(f"✅ Обработка завершена:\n{stats}")
+        for fname in saved_files:
+            await message.answer_document(FSInputFile(fname))
+            os.remove(fname)
+    os.remove(file_path)
+
+# === Webhook сервер ===
 async def on_startup(app: web.Application):
+    print(f"Устанавливаю webhook {WEBHOOK_URL}")
     await bot.set_webhook(WEBHOOK_URL)
 
 async def on_shutdown(app: web.Application):
@@ -122,8 +203,7 @@ async def on_shutdown(app: web.Application):
 
 def main():
     app = web.Application()
-    dp.include_router(dp)  # подключаем все handlers
-    app.router.add_post(WEBHOOK_PATH, dp.handler)  # aiogram сам обработает апдейты
+    app.router.add_post(WEBHOOK_PATH, dp.handler)  # dp.handler есть в aiogram 3.x
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
