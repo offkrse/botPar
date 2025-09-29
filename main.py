@@ -1,5 +1,6 @@
 import pandas as pd
 from aiogram import Bot, Dispatcher, types
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.types import FSInputFile
 from aiogram.filters import CommandStart, Command
 from aiohttp import web
@@ -203,9 +204,15 @@ async def on_shutdown(app: web.Application):
 
 def main():
     app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, dp.handler)  # dp.handler есть в aiogram 3.x
+
+    # создаём обработчик webhook для aiogram
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+
+    # навешиваем стартап/шутдаун
+    setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
+
     web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
 if __name__ == "__main__":
